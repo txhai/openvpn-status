@@ -105,12 +105,12 @@ class LogParser(Iterator):
         status = Status()
         labels = self.expect_header(Status.client_list.label)
         status.client_list.update({
-            text_type(c.real_address): c
+            text_type(c.common_name): c
             for c in self._parse_fields(Client, labels)})
 
         labels = self.expect_header(Status.routing_table.label)
         status.routing_table.update({
-            text_type(r.virtual_address): r
+            text_type(r.common_name): r
             for r in self._parse_fields(Routing, labels)})
 
         # self.expect_line(self.terminator)
@@ -142,7 +142,7 @@ class LogParser(Iterator):
                     break
 
             instance = cls()
-            for index, name in index_to_name:
+            for index, name in index_to_name.items():
                 setattr(instance, name, values[index])
 
             yield instance
