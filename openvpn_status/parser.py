@@ -2,7 +2,7 @@ from __future__ import absolute_import
 
 from six import Iterator, next, text_type
 
-from .models import Status, Client, Routing, GlobalStats
+from .models import Status, Client, Routing
 from .descriptors import iter_descriptors, AssignmentValueError
 
 
@@ -43,6 +43,19 @@ class LogParser(Iterator):
 
     def rollback(self):
         self._rollback = True
+
+    def expect_header(self, header) -> list:
+        while True:
+            try:
+                line: str = next(self)
+            except StopIteration:
+                raise ParsingError('expected %r but got end of input' % header)
+
+            if line.startswith(f'HEADER,{header}'):
+                labels = line.split(self.list_separator)[1:]
+                if len(labels) == 1:
+                    raise ParsingError('expected list of label but got %r' % line)
+                return labels
 
     def expect_line(self, content):
         try:
@@ -90,46 +103,48 @@ class LogParser(Iterator):
 
     def _parse(self):
         status = Status()
-        self.expect_line(Status.client_list.label)
-
-        status.updated_at = self.expect_tuple(Status.updated_at.label)
+        labels = self.expect_header(Status.client_list.label)
         status.client_list.update({
-            text_type(c.real_address): c
-            for c in self._parse_fields(Client, Status.routing_table.label)})
-        status.routing_table.update({
-            text_type(r.virtual_address): r
-            for r in self._parse_fields(Routing, Status.global_stats.label)})
-        status.global_stats = GlobalStats()
-        status.global_stats.max_bcast_mcast_queue_len = self.expect_tuple(
-            GlobalStats.max_bcast_mcast_queue_len.label)
+            text_type(c.common_name): c
+            for c in self._parse_fields(Client, labels)})
 
-        self.expect_line(self.terminator)
+        labels = self.expect_header(Status.routing_table.label)
+        status.routing_table.update({
+            text_type(r.common_name): r
+            for r in self._parse_fields(Routing, labels)})
+
+        # self.expect_line(self.terminator)
         return status
 
-    def _parse_fields(self, cls, next_line):
-        labels = self.expect_list()
+    def _parse_fields(self, cls, labels):
+
         descriptors = iter_descriptors(cls)
         label_to_name = {
             descriptor.label: name for name, descriptor in descriptors}
-        index_to_name = {
-            index: label_to_name[label] for index, label in enumerate(labels)}
+
+        index_to_name = {}
+        for index, label in enumerate(labels):
+            if label in label_to_name:
+                index_to_name[index] = label_to_name[label]
 
         while True:
             try:
                 values = self.expect_list()
+                if len(values) != len(labels):
+                    raise ParsingError()
+
             except ParsingError as list_error:
                 try:
                     self.rollback()
-                    self.expect_line(next_line)
                 except ParsingError as line_error:
                     raise ParsingError(*(list_error.args + line_error.args))
                 else:
                     break
 
             instance = cls()
-            for index, value in enumerate(values):
-                name = index_to_name[index]
-                setattr(instance, name, value)
+            for index, name in index_to_name.items():
+                setattr(instance, name, values[index])
+
             yield instance
 
 
